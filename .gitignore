@@ -1,0 +1,30 @@
+# 虛擬環境
+venv/
+env/
+.venv/
+
+# Python 快取
+__pycache__/
+*.pyc
+*.pyo
+.ipynb_checkpoints/
+
+# 資料檔案（不要把大型資料推到 GitHub）
+data/raw/*.csv
+data/processed/*.csv
+
+# 訓練好的模型
+models/*.pkl
+models/*.joblib
+
+# VS Code 個人設定
+.vscode/
+
+# Kaggle API Key（絕對不能外洩！）
+kaggle.json
+
+# macOS
+.DS_Store
+
+# Jupyter
+.ipynb_checkpoints/
