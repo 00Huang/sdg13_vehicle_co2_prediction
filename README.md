@@ -1,5 +1,6 @@
 # SDG 13: Vehicle CO2 Emissions Prediction
-## Personal Midterm Report — ML-based Solution for Climate Action
+
+> Using machine learning to predict vehicle CO2 emissions from specifications — and challenging the long-held policy assumption that "bigger engines pollute more."
 
 [English](#english) | [中文](#中文)
 
@@ -7,18 +8,12 @@
 
 ## English
 
-> A Machine Learning-based solution addressing **UN Sustainable Development Goal 13 (Climate Action)** by predicting vehicle CO2 emissions from vehicle specifications.
+### 🔑 Key Findings
 
-### 📌 Midterm Report Progress
-
-| Requirement | Status | Location |
-|---|---|---|
-| 1. Clear Problem Definition | ✅ Complete | [§1 Problem Definition](#1-problem-definition) |
-| 2. Data Sources and Processing | ✅ Complete | [§2 Data & Processing](#2-data-sources-and-processing) · [`notebooks/01_eda.ipynb`](notebooks/01_eda.ipynb) |
-| 3. Model Selection and Discussion | ✅ Complete | [§3 Model Selection](#3-model-selection-and-discussion) |
-| 4. Training and Testing | 🚧 In Progress | [`notebooks/03_modeling.ipynb`](notebooks/03_modeling.ipynb) |
-
-**First Delivery (Due 4/24, 30%)**: Requirements 1–3 complete with preliminary data processing and model exploration.
+- **Fuel consumption is the dominant, linear lever**: each 1 L/100km reduction → ~17 g/km less CO2 (≈ 510 kg saved annually at 15,000 km/yr)
+- **Engine size and cylinder count contribute < 1%** to emission prediction — challenging displacement-based taxation systems (e.g., Japan's *kei-car*, EU's CO2/kW scheme)
+- **Ethanol vehicles exhibit a counterintuitive double-effect**: lower per-liter carbon coefficient, but market availability clusters at high fuel consumption (all ≥ 17 L/100km), canceling the fuel advantage
+- **Best model (XGBoost, hyperparameter-tuned)**: R² = 0.9982, RMSE = 2.52 g/km on held-out test set
 
 ---
 
@@ -26,188 +21,113 @@
 
 **SDG Addressed**: SDG 13 — Climate Action
 
-**Problem Statement**:
-The transportation sector accounts for approximately 24% of global energy-related CO2 emissions, with road transport representing the majority share. Consumers purchasing vehicles often lack intuitive tools to assess how vehicle specifications (engine size, fuel type, fuel consumption) translate into CO2 emissions. Likewise, manufacturers and regulators need data-driven insights to identify high-impact design features and inform policy.
+Road transportation accounts for roughly a quarter of global energy-related CO2 emissions. Most current vehicle tax systems and eco-labels grade by **engine displacement**, built on the intuition that larger engines emit more. Yet this intuition has rarely been **quantitatively tested** against empirical data.
 
-**Proposed Solution**:
-Build regression models that predict vehicle CO2 emissions (g/km) from specification data, enabling:
-- **Consumers**: Environmental decision support when purchasing vehicles
-- **Manufacturers**: Identification of key design factors influencing emissions
-- **Policymakers**: Data-driven evidence for carbon taxation and emission standards
+This project addresses three gaps:
 
-**Why ML?**
-Unlike rule-based approaches, ML models can capture nonlinear interactions between features (e.g., the combined effect of engine size and vehicle class) and provide feature importance rankings that reveal actionable insights.
+1. **Consumers** choosing "eco-friendly" vehicles often rely on engine size as a proxy, but lack data-driven tools to assess the actual emission impact of different specifications.
+2. **Manufacturers** need to identify which design decisions most affect emissions — beyond simple heuristics.
+3. **Policymakers** designing carbon taxation need empirical evidence for which vehicle features best predict emissions.
+
+**Solution**: Build a regression model to predict CO2 emissions (g/km) from vehicle specifications, and use **interpretability analysis (SHAP)** to quantify each feature's contribution — providing actionable, evidence-based insights for all three audiences.
+
+**Why ML, not simple formulas?** Although burning 1 L of gasoline produces approximately 2.3 kg of CO2 (a near-linear chemistry), real vehicle emissions depend on **interactions** between fuel type, fuel consumption, engine design, and transmission. ML models can capture these non-linear interactions while providing interpretable per-feature contributions.
 
 ---
 
 ### 2. Data Sources and Processing
 
-#### 2.1 Data Source
+**Data source**: Canadian government open data on new vehicle registrations (2014–2020), published via [Kaggle](https://www.kaggle.com/datasets/debajyotipodder/co2-emission-by-vehicles) — **7,385 vehicles × 12 features**. Target variable: `CO2 Emissions (g/km)`, range 96–522.
 
-- **Dataset**: [CO2 Emission by Vehicles](https://www.kaggle.com/datasets/debajyotipodder/co2-emission-by-vehicles)
-- **Author**: Debajyoti Podder (Kaggle)
-- **Original Source**: [Government of Canada Open Data](https://open.canada.ca/data/en/dataset/98f1a129-f628-4ce4-b24d-6f16bf24dd64)
-- **Size**: 7,385 records × 12 features
-- **Target Variable**: `CO2 Emissions (g/km)`
+**Key preprocessing decisions** (detailed rationale in notebooks):
 
-#### 2.2 Feature Description
-
-| Feature | Type | Description |
+| Step | Action | Rationale |
 |---|---|---|
-| Make, Model | Categorical | Vehicle brand and model |
-| Vehicle Class | Categorical | SUV, compact, etc. |
-| Engine Size (L) | Numerical | Displacement |
-| Cylinders | Numerical | Number of cylinders |
-| Transmission | Categorical | Transmission type |
-| Fuel Type | Categorical | X/Z/D/E/N (gasoline/diesel/ethanol/natural gas) |
-| Fuel Consumption (City/Hwy/Comb) | Numerical | L/100 km |
-| **CO2 Emissions (g/km)** | Numerical | **Target** |
+| 1 | Dropped `Fuel_City`, `Fuel_Hwy`, `Fuel_Comb_mpg` | Multicollinearity with `Fuel_Comb` (r > 0.95) |
+| 2 | Dropped `Model`, `Make` | High cardinality (2000+ / 40+ unique values) with long-tail distribution |
+| 3 | Removed 1 row where `Fuel_Type = 'N'` | Insufficient samples to learn this category |
+| 4 | One-Hot encoded remaining categorical features | No inherent ordinal relationship |
+| 5 | StandardScaler for numerical features | Different scales (Engine_Size: 0.9–8.4 vs Fuel_Comb: 4–26) |
+| 6 | 80/20 train/test split with `random_state=42` | Reproducibility; stratified splitting not applicable for regression |
 
-#### 2.3 Processing Pipeline
+All transformations are **fit on training data only** and applied to test data via `transform()`, preventing data leakage. The fitted pipeline is serialized to `models/preprocessor.joblib` for reuse.
 
-1. **Missing value inspection** — Check for and handle missing entries
-2. **Feature renaming** — Clean column names for Python compatibility
-3. **Multicollinearity removal** — Fuel_City / Fuel_Hwy / Fuel_Comb show correlation > 0.98; retain only Fuel_Comb
-4. **Categorical encoding** — One-Hot Encoding for Make, Vehicle Class, Transmission, Fuel Type
-5. **Numerical scaling** — StandardScaler for Engine Size, Cylinders, Fuel Consumption
-6. **Outlier detection** — IQR method on target variable
-7. **Train/test split** — 80/20 with `random_state=42`
-
-#### 2.4 Sample Code Snippet
-
-```python
-import pandas as pd
-from sklearn.model_selection import train_test_split
-from sklearn.preprocessing import StandardScaler, OneHotEncoder
-from sklearn.compose import ColumnTransformer
-
-# Load dataset
-df = pd.read_csv('data/raw/CO2 Emissions_Canada.csv')
-df.columns = ['Make', 'Model', 'Vehicle_Class', 'Engine_Size', 'Cylinders',
-              'Transmission', 'Fuel_Type', 'Fuel_City', 'Fuel_Hwy',
-              'Fuel_Comb', 'Fuel_Comb_mpg', 'CO2_Emissions']
-
-# Remove multicollinear and high-cardinality features
-df_clean = df.drop(columns=['Model', 'Fuel_City', 'Fuel_Hwy', 'Fuel_Comb_mpg'])
-
-# Define feature types
-categorical_features = ['Make', 'Vehicle_Class', 'Transmission', 'Fuel_Type']
-numerical_features = ['Engine_Size', 'Cylinders', 'Fuel_Comb']
-
-# Build preprocessing pipeline
-preprocessor = ColumnTransformer(transformers=[
-    ('num', StandardScaler(), numerical_features),
-    ('cat', OneHotEncoder(handle_unknown='ignore'), categorical_features)
-])
-
-# Split and transform
-X = df_clean.drop(columns=['CO2_Emissions'])
-y = df_clean['CO2_Emissions']
-X_train, X_test, y_train, y_test = train_test_split(
-    X, y, test_size=0.2, random_state=42)
-
-X_train_processed = preprocessor.fit_transform(X_train)
-X_test_processed = preprocessor.transform(X_test)
-```
-
-Full implementation: [`notebooks/01_eda.ipynb`](notebooks/01_eda.ipynb) and [`notebooks/02_preprocessing.ipynb`](notebooks/02_preprocessing.ipynb)
+📓 *Full implementation with sample code and EDA visualizations*: [`notebooks/01_eda.ipynb`](notebooks/01_eda.ipynb) and [`notebooks/02_preprocessing.ipynb`](notebooks/02_preprocessing.ipynb)
 
 ---
 
 ### 3. Model Selection and Discussion
 
-Three regression models are compared, each representing a different ML paradigm:
+Three models spanning different ML paradigms were compared:
 
-| Model | Paradigm | Strengths | Limitations |
-|---|---|---|---|
-| **Linear Regression** | Parametric baseline | Highly interpretable; fast training; physically consistent with fuel-to-CO2 relationship | Cannot capture feature interactions or nonlinearities |
-| **Random Forest Regressor** | Bagging ensemble | Captures nonlinear interactions; robust to outliers; provides feature importance | Lower interpretability; larger model size |
-| **XGBoost Regressor** | Gradient boosting | State-of-the-art for tabular data; handles missing values; regularization support | More hyperparameters to tune; risk of overfitting |
+**Linear Regression** (baseline) — Chosen as a physically meaningful reference point. Since CO2 emissions follow a near-linear relationship with fuel consumption (~2.3 kg CO2 per liter of gasoline), linear regression establishes whether the problem needs anything more sophisticated.
 
-#### Suitability Discussion
+**Random Forest Regressor** (bagging ensemble) — Chosen for its ability to capture feature interactions (e.g., different slopes for different fuel types, as revealed in EDA scatter plots) and for providing built-in feature importance rankings.
 
-- **Linear Regression** serves as a theoretical baseline: burning one liter of gasoline produces ~2.3 kg of CO2, suggesting a near-linear relationship between fuel consumption and emissions. This makes it a meaningful reference point.
-- **Random Forest** is well-suited for exploring **feature importance**, which directly supports the SDG 13 goal of identifying design factors with the greatest emission impact.
-- **XGBoost** represents the current state-of-the-art for tabular regression and demonstrates the effort of learning a modern ML method — a key requirement of this midterm report.
+**XGBoost Regressor** (gradient boosting) — Chosen as the current state-of-the-art for tabular regression, and to fulfill the assignment requirement of learning a modern ML method. Its sequential boosting architecture tends to outperform bagging on complex tabular data.
 
-**Critical Analysis (to be discussed in report)**:
-Due to the near-linear relationship between fuel consumption and CO2, all models are expected to achieve high R² (>0.9). A secondary experiment will evaluate models **without the fuel consumption feature** to test whether vehicle specifications alone can predict emissions — a more practically meaningful scenario.
+**Comparison strategy**: Models are evaluated on a held-out test set using R², RMSE, and MAE (classification metrics like accuracy and confusion matrix do not apply to regression). XGBoost is additionally tuned via 5-fold cross-validated **Grid Search** over 27 hyperparameter configurations.
+
+**Interpretability layer**: Beyond comparing predictive accuracy, this project uses **SHAP (SHapley Additive exPlanations)** to analyze *how* each feature contributes to predictions. This distinguishes features that merely correlate with emissions from those that have quantifiable, isolated effects — critical for drawing reliable policy conclusions.
+
+📓 *Full model training, tuning, and SHAP analysis*: [`notebooks/03_modeling.ipynb`](notebooks/03_modeling.ipynb)
 
 ---
 
-### 4. Training and Testing (In Progress)
+### 🗺️ How to Navigate This Repository
 
-Planned evaluation:
-- **Metrics**: R², RMSE, MAE
-- **Validation**: 5-fold cross-validation
-- **Analysis**: Feature importance, residual plots, predicted vs. actual plots
-- **Ablation**: Models with vs. without fuel consumption features
+| File | What You'll See |
+|---|---|
+| [`notebooks/01_eda.ipynb`](notebooks/01_eda.ipynb) | Data exploration, correlation analysis, fuel-type stratification discovery |
+| [`notebooks/02_preprocessing.ipynb`](notebooks/02_preprocessing.ipynb) | Preprocessing pipeline with decision rationale |
+| [`notebooks/03_modeling.ipynb`](notebooks/03_modeling.ipynb) | Four-model comparison, Grid Search, SHAP interpretability |
 
-Progress tracked in [`notebooks/03_modeling.ipynb`](notebooks/03_modeling.ipynb).
+### 📋 Assignment Requirement Mapping
 
----
+| Requirement | Location |
+|---|---|
+| 1. Problem Definition | [Section 1](#1-problem-definition) |
+| 2. Data Sources and Processing (incl. code sample) | [Section 2](#2-data-sources-and-processing) · [`01_eda.ipynb`](notebooks/01_eda.ipynb) · [`02_preprocessing.ipynb`](notebooks/02_preprocessing.ipynb) |
+| 3. Model Selection and Discussion | [Section 3](#3-model-selection-and-discussion) · [`03_modeling.ipynb`](notebooks/03_modeling.ipynb) |
+| 4. Training and Testing | [`03_modeling.ipynb`](notebooks/03_modeling.ipynb) |
 
-### 🗂️ Repository Structure
-
-sdg13-vehicle-co2-prediction/
-├── data/
-│   ├── raw/              # Original CSV (not tracked in Git)
-│   └── processed/        # Processed datasets
-├── notebooks/
-│   ├── 01_eda.ipynb              # Exploratory Data Analysis
-│   ├── 02_preprocessing.ipynb    # Data Processing Pipeline
-│   └── 03_modeling.ipynb         # Model Training & Evaluation
-├── src/                  # Reusable Python modules
-├── reports/
-│   ├── figures/          # Exported plots
-│   └── midterm_report.md # Formal report document
-├── models/               # Saved trained models
-├── requirements.txt
-├── .gitignore
-└── README.md
-
-### 🛠️ Setup
+### 🛠️ Reproducing This Project
 
 ```bash
-git clone https://github.com/your-username/sdg13-vehicle-co2-prediction.git
-cd sdg13-vehicle-co2-prediction
+git clone https://github.com/00Huang/sdg13_vehicle_co2_prediction.git
+cd sdg13_vehicle_co2_prediction
 
 python -m venv venv
 venv\Scripts\activate         # Windows
-# source venv/bin/activate    # Mac/Linux
+# source venv/bin/activate    # macOS/Linux
 
 pip install -r requirements.txt
 ```
 
-Download the dataset from [Kaggle](https://www.kaggle.com/datasets/debajyotipodder/co2-emission-by-vehicles) and place `CO2 Emissions_Canada.csv` in `data/raw/`.
+Download `CO2 Emissions_Canada.csv` from the Kaggle link above and place it in `data/raw/`.
 
 ### 📚 References
 
-- UN Sustainable Development Goals: [SDG 13 — Climate Action](https://sdgs.un.org/goals/goal13)
+- UN SDG 13 — [Climate Action](https://sdgs.un.org/goals/goal13)
 - Dataset: [Debajyoti Podder — CO2 Emission by Vehicles](https://www.kaggle.com/datasets/debajyotipodder/co2-emission-by-vehicles)
 - Original data: [Government of Canada Open Data](https://open.canada.ca/data/en/dataset/98f1a129-f628-4ce4-b24d-6f16bf24dd64)
 
 ### 👤 Author
 
-[Your Name] — [Course Name], 2026
+[黃柄博] — [MLSECOPS], 2026
 
 ---
+
 ---
 
 ## 中文
 
-> 以機器學習為基礎的解決方案，回應聯合國**永續發展目標 13（氣候行動）**，透過車輛規格預測 CO2 排放量。
+### 🔑 核心發現
 
-### 📌 期中報告進度
-
-| 作業要求 | 狀態 | 位置 |
-|---|---|---|
-| 1. 問題定義 | ✅ 完成 | [§1 問題定義](#1-問題定義) |
-| 2. 資料來源與處理 | ✅ 完成 | [§2 資料與處理](#2-資料來源與處理) · [`notebooks/01_eda.ipynb`](notebooks/01_eda.ipynb) |
-| 3. 模型選擇與討論 | ✅ 完成 | [§3 模型選擇](#3-模型選擇與討論) |
-| 4. 訓練與測試 | 🚧 進行中 | [`notebooks/03_modeling.ipynb`](notebooks/03_modeling.ipynb) |
-
-**第一次交件（4/24，30%）**：要求 1–3 完成，包含資料處理與新 ML 模型學習的實作成果。
+- **油耗是主導的線性減碳槓桿**：每降低 1 L/100km → 減排約 17 g/km（以每年 15,000 km 計算，年省約 510 kg CO2）
+- **引擎排氣量與汽缸數對排放預測的貢獻 < 1%**——挑戰現行以排氣量分級的稅制（日本輕自動車、歐盟 CO2/kW 方案）
+- **乙醇車呈現反直覺的雙重效應**：每公升碳排係數較低，但市場上的乙醇車油耗皆偏高（全數 ≥ 17 L/100km），燃料優勢被車款設計抵銷
+- **最佳模型（調參後 XGBoost）**：測試集 R² = 0.9982、RMSE = 2.52 g/km
 
 ---
 
@@ -215,167 +135,97 @@ Download the dataset from [Kaggle](https://www.kaggle.com/datasets/debajyotipodd
 
 **對應 SDG**：SDG 13 — 氣候行動
 
-**問題陳述**：
-運輸部門約占全球能源相關 CO2 排放量的 24%，其中道路運輸為主要來源。消費者購車時往往缺乏直觀工具來評估車輛規格（引擎大小、燃料類型、油耗）如何轉化為 CO2 排放量；車廠與政策制定者同樣需要資料驅動的洞察，以識別高影響力的設計因素並制定相關政策。
+道路運輸約占全球能源相關 CO2 排放的四分之一。目前多數國家的汽車稅制與環保標籤以**引擎排氣量**為分級基礎，預設「引擎越大越耗能」。然而這個直覺很少被**實證資料量化檢驗**。
 
-**解決方案**：
-建立回歸模型，從車輛規格資料預測 CO2 排放量（g/km），應用包括：
-- **消費者**：購車時的環保決策輔助
-- **車廠**：識別影響排放的關鍵設計因素
-- **政策制定者**：碳稅與排放標準的數據依據
+本專案處理三個面向：
 
-**為何使用機器學習？**
-相較於規則式方法，ML 模型能捕捉特徵間的非線性交互作用（例如引擎大小與車輛類型的綜合影響），並提供特徵重要性排名，揭示可行動的洞察。
+1. **消費者**選購「環保車」時，常以引擎大小為替代指標，但缺乏資料驅動的工具評估不同規格對實際排放的影響。
+2. **車廠**需要識別哪些設計決策最影響排放——而非只靠經驗法則。
+3. **政策制定者**設計碳稅時，需要實證依據來判斷哪些車輛特徵最能預測排放。
+
+**解決方案**：建立回歸模型從車輛規格預測 CO2 排放量（g/km），並透過 **SHAP 解釋性分析**量化每個特徵的貢獻——為三類讀者提供可行動的證據基礎。
+
+**為何使用 ML 而非簡單公式？** 雖然燃燒 1 公升汽油約產生 2.3 公斤 CO2（接近線性的化學反應），但真實的車輛排放取決於**燃料類型、油耗、引擎設計、變速箱之間的交互作用**。ML 模型能捕捉這些非線性交互作用，同時提供可解釋的特徵貢獻度。
 
 ---
 
 ### 2. 資料來源與處理
 
-#### 2.1 資料來源
+**資料來源**：加拿大政府 2014–2020 新車登錄公開資料，透過 [Kaggle](https://www.kaggle.com/datasets/debajyotipodder/co2-emission-by-vehicles) 取得——**7,385 筆車輛 × 12 個特徵**。目標變數：`CO2 Emissions (g/km)`，範圍 96–522。
 
-- **資料集**：[CO2 Emission by Vehicles](https://www.kaggle.com/datasets/debajyotipodder/co2-emission-by-vehicles)
-- **作者**：Debajyoti Podder（Kaggle）
-- **原始來源**：[加拿大政府公開資料](https://open.canada.ca/data/en/dataset/98f1a129-f628-4ce4-b24d-6f16bf24dd64)
-- **規模**：7,385 筆資料 × 12 個特徵
-- **目標變數**：CO2 排放量（g/km）
+**關鍵前處理決策**（詳細理由見 notebook）：
 
-#### 2.2 特徵說明
-
-| 特徵 | 類型 | 說明 |
+| 步驟 | 處理方式 | 理由 |
 |---|---|---|
-| Make, Model | 類別 | 車輛品牌與型號 |
-| Vehicle Class | 類別 | SUV、小型車等 |
-| Engine Size (L) | 數值 | 引擎排氣量 |
-| Cylinders | 數值 | 汽缸數 |
-| Transmission | 類別 | 變速箱類型 |
-| Fuel Type | 類別 | X/Z/D/E/N（汽油/高辛烷汽油/柴油/乙醇/天然氣）|
-| Fuel Consumption (City/Hwy/Comb) | 數值 | L/100 km |
-| **CO2 Emissions (g/km)** | 數值 | **目標變數** |
+| 1 | 移除 `Fuel_City`、`Fuel_Hwy`、`Fuel_Comb_mpg` | 與 `Fuel_Comb` 多元共線（r > 0.95）|
+| 2 | 移除 `Model`、`Make` | 高基數（2000+ / 40+ 唯一值）且呈長尾分布 |
+| 3 | 移除 `Fuel_Type = 'N'` 的 1 筆資料 | 樣本不足以學習該類別 |
+| 4 | 剩餘類別特徵採用 One-Hot 編碼 | 無內在順序關係 |
+| 5 | 數值特徵採用 StandardScaler | 尺度差異大（Engine_Size: 0.9–8.4 vs Fuel_Comb: 4–26）|
+| 6 | 80/20 訓練/測試集切分（`random_state=42`）| 確保可重現；回歸任務不適用 stratified 切分 |
 
-#### 2.3 處理流程
+所有轉換**僅在訓練集上 fit**，測試集透過 `transform()` 套用，避免資料洩漏。訓練好的 pipeline 序列化儲存至 `models/preprocessor.joblib` 供重複使用。
 
-1. **缺失值檢查** — 檢查並處理缺失資料
-2. **欄位重新命名** — 整理欄位名稱以利 Python 處理
-3. **移除多元共線特徵** — Fuel_City / Fuel_Hwy / Fuel_Comb 相關係數超過 0.98，僅保留 Fuel_Comb
-4. **類別特徵編碼** — 對 Make、Vehicle Class、Transmission、Fuel Type 使用 One-Hot Encoding
-5. **數值特徵標準化** — 對 Engine Size、Cylinders、Fuel Consumption 使用 StandardScaler
-6. **異常值檢測** — 使用 IQR 方法檢查目標變數
-7. **訓練/測試集切分** — 80/20，`random_state=42`
-
-#### 2.4 程式碼範例
-
-```python
-import pandas as pd
-from sklearn.model_selection import train_test_split
-from sklearn.preprocessing import StandardScaler, OneHotEncoder
-from sklearn.compose import ColumnTransformer
-
-# 載入資料集
-df = pd.read_csv('data/raw/CO2 Emissions_Canada.csv')
-df.columns = ['Make', 'Model', 'Vehicle_Class', 'Engine_Size', 'Cylinders',
-              'Transmission', 'Fuel_Type', 'Fuel_City', 'Fuel_Hwy',
-              'Fuel_Comb', 'Fuel_Comb_mpg', 'CO2_Emissions']
-
-# 移除多元共線特徵與高維類別特徵
-df_clean = df.drop(columns=['Model', 'Fuel_City', 'Fuel_Hwy', 'Fuel_Comb_mpg'])
-
-# 定義特徵類型
-categorical_features = ['Make', 'Vehicle_Class', 'Transmission', 'Fuel_Type']
-numerical_features = ['Engine_Size', 'Cylinders', 'Fuel_Comb']
-
-# 建立前處理 pipeline
-preprocessor = ColumnTransformer(transformers=[
-    ('num', StandardScaler(), numerical_features),
-    ('cat', OneHotEncoder(handle_unknown='ignore'), categorical_features)
-])
-
-# 切分並轉換
-X = df_clean.drop(columns=['CO2_Emissions'])
-y = df_clean['CO2_Emissions']
-X_train, X_test, y_train, y_test = train_test_split(
-    X, y, test_size=0.2, random_state=42)
-
-X_train_processed = preprocessor.fit_transform(X_train)
-X_test_processed = preprocessor.transform(X_test)
-```
-
-完整實作：[`notebooks/01_eda.ipynb`](notebooks/01_eda.ipynb) 與 [`notebooks/02_preprocessing.ipynb`](notebooks/02_preprocessing.ipynb)
+📓 *完整實作與程式碼範例、EDA 視覺化*：[`notebooks/01_eda.ipynb`](notebooks/01_eda.ipynb) 與 [`notebooks/02_preprocessing.ipynb`](notebooks/02_preprocessing.ipynb)
 
 ---
 
 ### 3. 模型選擇與討論
 
-本專案比較三種不同機器學習範式的回歸模型：
+比較三種代表不同 ML 範式的模型：
 
-| 模型 | 範式 | 優勢 | 限制 |
-|---|---|---|---|
-| **線性回歸** | 參數式基準模型 | 高可解釋性；訓練快速；符合油耗與 CO2 的物理線性關係 | 無法捕捉特徵交互作用與非線性 |
-| **隨機森林** | Bagging 集成學習 | 能捕捉非線性交互作用；對異常值穩健；提供特徵重要性 | 可解釋性較低；模型較大 |
-| **XGBoost** | 梯度提升 | 表格資料目前的 SOTA；可處理缺失值；支援正則化 | 超參數較多；過擬合風險 |
+**Linear Regression（線性回歸，基準模型）**——作為具物理意義的參考點。由於 CO2 排放與油耗呈接近線性的關係（燃燒 1 公升汽油約產生 2.3 公斤 CO2），線性回歸能檢驗這個問題是否需要更複雜的模型。
 
-#### 適用性討論
+**Random Forest Regressor（隨機森林，Bagging 集成）**——能捕捉特徵交互作用（例如 EDA 散點圖揭露的不同燃料類型有不同斜率），並提供內建的特徵重要性排名。
 
-- **線性回歸**作為理論基準：燃燒 1 公升汽油約產生 2.3 公斤 CO2，表示油耗與排放間接近線性關係，因此線性回歸是具物理意義的參考基準。
-- **隨機森林**適合探索**特徵重要性**，直接回應 SDG 13 的核心目標——識別影響排放最大的設計因素。
-- **XGBoost** 代表表格型回歸任務的當前最佳實踐，並展現學習現代 ML 方法的努力（期中報告的關鍵要求）。
+**XGBoost Regressor（梯度提升）**——表格資料目前的 SOTA，同時滿足作業要求「學習現代 ML 方法」。其序列式提升架構在複雜表格資料上通常優於 Bagging。
 
-**批判性分析（將於報告中深入討論）**：
-由於油耗與 CO2 接近線性關係，所有模型預期均可達到高 R²（>0.9）。因此將進行補充實驗，評估**移除油耗特徵**後模型的表現——單純透過車輛規格是否能預測排放量，這是更具實用意義的情境。
+**比較策略**：使用 R²、RMSE、MAE 在獨立測試集上評估（分類指標如準確率、混淆矩陣不適用於回歸任務）。XGBoost 額外透過 5-fold 交叉驗證的 **Grid Search** 搜尋 27 組超參數組合進行調整。
+
+**解釋性分析**：除了比較預測準確度，本專案使用 **SHAP（SHapley Additive exPlanations）**分析每個特徵**如何**貢獻預測值。這能區分「僅與排放相關」的特徵和「有可量化獨立效應」的特徵——這對於導出可信的政策結論至關重要。
+
+📓 *完整模型訓練、調參與 SHAP 分析*：[`notebooks/03_modeling.ipynb`](notebooks/03_modeling.ipynb)
 
 ---
 
-### 4. 訓練與測試（進行中）
+### 🗺️ 如何瀏覽這個 Repository
 
-預計評估項目：
-- **指標**：R²、RMSE、MAE
-- **驗證方式**：5-fold 交叉驗證
-- **分析**：特徵重要性、殘差圖、預測值 vs 實際值
-- **消融實驗**：含油耗特徵 vs 不含油耗特徵
+| 檔案 | 看什麼 |
+|---|---|
+| [`notebooks/01_eda.ipynb`](notebooks/01_eda.ipynb) | 資料探索、相關性分析、燃料類型分層現象的發現 |
+| [`notebooks/02_preprocessing.ipynb`](notebooks/02_preprocessing.ipynb) | 前處理 pipeline 與決策理由 |
+| [`notebooks/03_modeling.ipynb`](notebooks/03_modeling.ipynb) | 四模型比較、Grid Search、SHAP 解釋性分析 |
 
-進度追蹤於 [`notebooks/03_modeling.ipynb`](notebooks/03_modeling.ipynb)。
+### 📋 作業 Requirement 對應
 
----
+| 作業要求 | 位置 |
+|---|---|
+| 1. 問題定義 | [第 1 節](#1-問題定義) |
+| 2. 資料來源與處理（含程式碼範例） | [第 2 節](#2-資料來源與處理) · [`01_eda.ipynb`](notebooks/01_eda.ipynb) · [`02_preprocessing.ipynb`](notebooks/02_preprocessing.ipynb) |
+| 3. 模型選擇與討論 | [第 3 節](#3-模型選擇與討論) · [`03_modeling.ipynb`](notebooks/03_modeling.ipynb) |
+| 4. 訓練與測試 | [`03_modeling.ipynb`](notebooks/03_modeling.ipynb) |
 
-### 🗂️ 專案結構
-```
-sdg13-vehicle-co2-prediction/
-├── data/
-│   ├── raw/              # 原始 CSV（不上 Git）
-│   └── processed/        # 處理後資料
-├── notebooks/
-│   ├── 01_eda.ipynb              # 探索性資料分析
-│   ├── 02_preprocessing.ipynb    # 資料處理流程
-│   └── 03_modeling.ipynb         # 模型訓練與評估
-├── src/                  # 可重用 Python 模組
-├── reports/
-│   ├── figures/          # 匯出圖表
-│   └── midterm_report.md # 正式報告文件
-├── models/               # 已訓練模型
-├── requirements.txt
-├── .gitignore
-└── README.md
-```
-### 🛠️ 環境建置
+### 🛠️ 環境重建
 
 ```bash
-git clone https://github.com/your-username/sdg13-vehicle-co2-prediction.git
-cd sdg13-vehicle-co2-prediction
+git clone https://github.com/00Huang/sdg13_vehicle_co2_prediction.git
+cd sdg13_vehicle_co2_prediction
 
 python -m venv venv
 venv\Scripts\activate         # Windows
-# source venv/bin/activate    # Mac/Linux
+# source venv/bin/activate    # macOS/Linux
 
 pip install -r requirements.txt
 ```
 
-從 [Kaggle](https://www.kaggle.com/datasets/debajyotipodder/co2-emission-by-vehicles) 下載資料集，將 `CO2 Emissions_Canada.csv` 放入 `data/raw/` 資料夾。
+從上述 Kaggle 連結下載 `CO2 Emissions_Canada.csv`，放入 `data/raw/`。
 
 ### 📚 參考資料
 
-- 聯合國永續發展目標：[SDG 13 — 氣候行動](https://sdgs.un.org/goals/goal13)
+- 聯合國 SDG 13 — [氣候行動](https://sdgs.un.org/goals/goal13)
 - 資料集：[Debajyoti Podder — CO2 Emission by Vehicles](https://www.kaggle.com/datasets/debajyotipodder/co2-emission-by-vehicles)
 - 原始資料：[加拿大政府公開資料](https://open.canada.ca/data/en/dataset/98f1a129-f628-4ce4-b24d-6f16bf24dd64)
 
 ### 👤 作者
 
-[你的名字] — [課程名稱], 2026
+[黃柄博] — [人工智慧開發與安全], 2026
